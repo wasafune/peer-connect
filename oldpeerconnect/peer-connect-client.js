@@ -1,5 +1,3 @@
-/* eslint-env browser */
-/* eslint no-use-before-define: ["error", { "functions": false }] */
 
 const Peer = require('simple-peer');
 const parseTorrent = require('parse-torrent');
@@ -10,6 +8,8 @@ const WebTorrent = require('webtorrent');
  * adds methods to peers
  * @param {object} peer - peer object
  */
+
+
 function peerMethods(peer) {
   peer.on("error", err => {
     console.log(err);
@@ -61,15 +61,21 @@ let counter = 0;
 let extCounter = 0;
 let otherCounter = 0;
 
+
 // get img tag nodes
 let imageArray = Object.values(document.getElementsByTagName('img'));
 imageArray = imageArray.filter(node => node.hasAttribute('data-src'));
+let bgArray = [];
+let bgNumber = 0;
 let imageHeights;
 let imageSliceIndex;
 const inViewportArray = [];
 
 // assign ids to image
 imageArray.forEach((image, index) => image.setAttribute('id', index));
+
+// identify the number of background images
+bgIncrementer();
 
 //get video tag nodes
 let videoArray = Object.values(document.getElementsByTagName('video'));
@@ -290,10 +296,18 @@ function handleOnData(data) {
   loopImage();
 
   if (dataString.slice(0, 16) == "finished-sending") {
-    let imageIndex = data.slice(16);
-    setImage(imageData, imageArray, imageIndex);
-    imageData = '';
-    if (counter + extCounter === imageArray.length) {
+    if (dataString.slice(16,17) == '[') {
+      counter += 1;
+      const restofDataReceived = JSON.parse(dataString.slice(16));
+      setBackgroundImage(...restofDataReceived, imageData);
+      imageData = '';
+    }
+    else {
+      let imageIndex = data.slice(16);
+      setImage(imageData, imageArray, imageIndex);
+      imageData = '';
+    }
+    if (counter + extCounter === imageArray.length + bgNumber) {
       assetsDownloaded = true;
       p.destroy();
       checkForImageError();
@@ -349,7 +363,6 @@ function setImageHeights(imageArray, imageHeights) {
   imageHeights.forEach((height, idx) => {
     imageArray[idx].style.height = `${height}px`;
   });
-  getBackgroundImages();
 }
 
 /**
@@ -380,13 +393,19 @@ function sendAssetsToPeer(peer, sliceIndex) {
   //slice Array and only send requested data
   imageArray = imageArray.slice(sliceIndex);
 
-  //send only if requested by foldLoading
+  // send only if requested by foldLoading
   for (let i = 0; i < imageArray.length; i += 1) {
     const imageType = getImageType(imageArray[i]);
     if (configuration.assetTypes.includes(imageType)) {
       sendImage(imageArray[i], peer, i);
     }
   }
+  // send background images
+  getBackgroundImages();
+  bgArray.forEach((dataStr, i) => {
+    sendImage(dataStr, peer, 'bg' + i)
+  })
+
 }
 
 /**
@@ -414,7 +433,19 @@ function getImageType(image) {
  * @param {integer} imageIndex - the index of the image in the image array
  */
 function sendImage(image, peer, imageIndex) {
-  const data = getImageData(image);
+  // check if image is DOMnode or DATAURL,
+  // if DATAURL, data = DATAURL
+  // check if sending background image (bg)
+  let data;
+  let bg;
+  if (typeof image === 'string') {
+    bg = true;
+    data = image[2];
+    allData = image.slice(0,2);
+  } else {
+    bg = false;
+    data = getImageData(image);
+  }
   const CHUNK_SIZE = 64000;
   const n = data.length / CHUNK_SIZE;
   let start;
@@ -424,7 +455,11 @@ function sendImage(image, peer, imageIndex) {
     end = (f + 1) * CHUNK_SIZE;
     peer.send(data.slice(start, end));
   }
-  peer.send(`finished-sending${imageIndex}`);
+  if (bg) {
+    peer.send(`finished-sending${JSON.stringify(allData)}`);
+  } else {
+    peer.send(`finished-sending${imageIndex}`);
+  }
 }
 
 /**
@@ -453,7 +488,30 @@ function getBackgroundImages() {
           const propertyRegex = /background\s*(.*?)\s*;/g;
           const bgProperty = propertyRegex.exec(styleString)[0];
           const imgSrc = bgProperty.substring(bgProperty.indexOf('"') + 1, bgProperty.lastIndexOf('"'));
-          if (selector !== 'body') getImageData(imgSrc, selector, bgProperty);
+          if (selector !== 'body') {
+            bgArray.push([selector, bgProperty, getImageData(imgSrc, selector, bgProperty)]);
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * identifies background images and increments bgNumber
+*/
+function bgIncrementer() {
+  const sheets = document.styleSheets;
+  for (const i in sheets) {
+    const rules = sheets[i].rules || sheets[i].cssRules;
+    for (const r in rules) {
+      if (rules[r].selectorText) {
+        if (rules[r].cssText.includes('background:') || rules[r].cssText.includes('background-image:')) {
+          const styleString = rules[r].cssText;
+          const selector = styleString.substring(0, styleString.indexOf(' '));
+          if (selector !== 'body') {
+            bgNumber += 1;
+          }
         }
       }
     }
@@ -487,7 +545,7 @@ function getImageData(image, selector, bgProperty) {
   context.canvas.width = img.width;
   context.canvas.height = img.height;
   context.drawImage(img, 0, 0, img.width, img.height);
-  if (bgProperty) setBackgroundImage(selector, bgProperty, canvas.toDataURL());
+  // if (bgProperty) setBackgroundImage(selector, bgProperty, canvas.toDataURL());
   return canvas.toDataURL(`image/${type}`);
 }
 
